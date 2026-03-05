@@ -25,19 +25,19 @@ pub unsafe fn draw_splash(renderer: &Renderer, progress: u64) {
 
     // 2. Clear only the ACTIVE areas (Logo and Bar)
     // This is the "Dirty Rectangle" technique.
-    renderer.draw_rect(logo_x, logo_y, logo_w, logo_h, slate_bg);
-    renderer.draw_rect(bar_x, bar_y, bar_w, bar_h, slate_bg);
-
+    renderer.draw_rect(logo_x as usize, logo_y as usize, logo_w as usize, logo_h as usize, slate_bg);
+    renderer.draw_rect(bar_x as usize, bar_y as usize, bar_w as usize, bar_h as usize, slate_bg);
+    
     if progress <= 30 {
         let alpha = ((progress * 255) / 30) as u8;
         renderer.draw_image_faded(logo_x, logo_y, logo_w, logo_h, AEG_LOGO, alpha);
     } else {
         renderer.draw_image(logo_x, logo_y, logo_w, logo_h, AEG_LOGO);
         
-        renderer.draw_rect(bar_x, bar_y, bar_w, bar_h, track_color);
+        renderer.draw_rect(bar_x as usize, bar_y as usize, bar_w as usize, bar_h as usize, track_color);
         let progress_w = ((progress - 30) * bar_w) / 70;
         if progress_w > 0 {
-            renderer.draw_rect(bar_x, bar_y, progress_w, bar_h, accent_blue);
+            renderer.draw_rect(bar_x as usize, bar_y as usize, progress_w as usize, bar_h as usize, 0x00A8FF);
         }
     }
 
