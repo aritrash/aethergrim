@@ -18,38 +18,29 @@ pub unsafe fn draw_splash(renderer: &Renderer, progress: u64) {
     let bar_x = (renderer.width() - bar_w) / 2;
     let bar_y = (renderer.height() / 2) + 40;
 
-    // 1. Initial Setup: Clear exactly once.
+    // 1. Initial full-screen clear only at the very start
     if progress == 0 {
         renderer.clear_screen(slate_bg);
     }
 
-    // 2. Phase 1: Logo Fade (0 to 15)
-    // To kill flicker, we DO NOT clear the area. We rely on the fade math 
-    // to blend against the existing slate_bg.
-    if progress > 0 && progress <= 15 {
-        let alpha = ((progress * 255) / 15) as u8;
-        // We only draw every 3rd frame to let the bus breathe
-        if progress % 3 == 0 {
-            renderer.draw_image_faded(logo_x, logo_y, logo_w, logo_h, AEG_LOGO, alpha);
-        }
-    } 
-    
-    // 3. Phase 2: Progress Bar (16 to 100)
-    else if progress > 15 {
-        // Draw the solid logo EXACTLY ONCE
-        if progress == 16 {
-            renderer.draw_image(logo_x, logo_y, logo_w, logo_h, AEG_LOGO);
-            // Draw the empty track once
-            renderer.draw_rect(bar_x, bar_y, bar_w, bar_h, track_color);
-        }
+    // 2. Clear only the ACTIVE areas (Logo and Bar)
+    // This is the "Dirty Rectangle" technique.
+    renderer.draw_rect(logo_x, logo_y, logo_w, logo_h, slate_bg);
+    renderer.draw_rect(bar_x, bar_y, bar_w, bar_h, slate_bg);
 
-        let internal_p = ((progress - 16) * 100) / 84;
-        let progress_w = (internal_p * bar_w) / 100;
-
-        // NO CLEARING HERE. Just draw the blue bar. 
-        // Since the bar only grows, it will naturally cover the track.
+    if progress <= 30 {
+        let alpha = ((progress * 255) / 30) as u8;
+        renderer.draw_image_faded(logo_x, logo_y, logo_w, logo_h, AEG_LOGO, alpha);
+    } else {
+        renderer.draw_image(logo_x, logo_y, logo_w, logo_h, AEG_LOGO);
+        
+        renderer.draw_rect(bar_x, bar_y, bar_w, bar_h, track_color);
+        let progress_w = ((progress - 30) * bar_w) / 70;
         if progress_w > 0 {
             renderer.draw_rect(bar_x, bar_y, progress_w, bar_h, accent_blue);
         }
     }
+
+    // 3. Blit to front buffer
+    renderer.swap_buffers();
 }

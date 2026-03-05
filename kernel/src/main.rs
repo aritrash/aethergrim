@@ -44,6 +44,9 @@ pub extern "C" fn _start() -> ! {
     }
 }
 
+#[link_section = ".bss"]
+static mut BACKBUFFER: [u32; 1920 * 1080] = [0; 1920 * 1080];
+
 extern "C" fn kernel_main() -> ! {
     // 1. Initial Hardware Setup
     // Note: serial_println! macro must be imported or available here
@@ -62,31 +65,19 @@ extern "C" fn kernel_main() -> ! {
     if let Some(response) = FRAMEBUFFER_REQUEST.get_response().get() {
         if let Some(fb_ptr) = response.framebuffers().iter().next() {
             let fb = unsafe { &*fb_ptr.as_ptr() };
-            let renderer = Renderer::new(fb);
+            
+            // Fixed: Pass the static BACKBUFFER pointer
+            let renderer = Renderer::new(fb, unsafe { BACKBUFFER.as_mut_ptr() });
 
-            // Enable interrupts to allow the timer for sleep() to work
             x86_64::instructions::interrupts::enable();
 
-            // Inside kernel_main in main.rs
             unsafe {
-                // Single global clear
-                renderer.clear_screen(0x000D1117);
-                
-                // Smooth loop
                 for p in 0..=100 {
                     draw_splash(&renderer, p as u64);
-                    
-                    // Increase to 2 or 3 if your emulator is struggling with bus speed
-                    sleep(1, &renderer); 
                 }
 
-                // Hold the finished state
-                sleep(50, &renderer);
-
-                // Final wipe to OS state
                 renderer.clear_screen(0x000D1117);
-                
-                crate::serial_println!("Transition to Slate complete.");
+                renderer.swap_buffers();
             }
         }
     } else {
