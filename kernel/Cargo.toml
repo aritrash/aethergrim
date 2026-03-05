@@ -8,3 +8,5 @@ limine = "0.1.12"
 x86_64 = "0.14.13"
 spin = "0.9.8"
 lazy_static = { version = "1.5.0", features = ["spin_no_std"] }
+pic8259 = "0.10.1"
+uart_16550 = "0.3"
