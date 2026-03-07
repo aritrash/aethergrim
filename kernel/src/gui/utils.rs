@@ -6,7 +6,7 @@ use alloc::boxed::Box;
 
 pub struct Renderer<'a> {
     pub fb: &'a limine::Framebuffer,
-    pub buffer: *mut u32, // Change 'backbuffer' to 'buffer' to match your struct
+    pub buffer: *mut u32, 
     pub cursor_backup: Box<[u32; cursor::CURSOR_WIDTH * cursor::CURSOR_HEIGHT]>,
     pub last_cursor_x: usize,
     pub last_cursor_y: usize,
@@ -37,16 +37,11 @@ impl<'a> Renderer<'a> {
     pub unsafe fn swap_buffers(&self) {
         let front_ptr = self.fb.address.as_ptr().unwrap() as *mut u32;
         let pixel_count = (self.fb.width * self.fb.height) as usize;
-        
-        // This is significantly faster than a manual loop.
-        // It bypasses the overhead of incrementing loop counters in Rust.
         core::ptr::copy_nonoverlapping(self.buffer, front_ptr, pixel_count);
     }
 
     pub unsafe fn clear_screen(&self, color: u32) {
         let pixel_count = (self.fb.width * self.fb.height) as usize;
-        // Optimization: If clearing to black, use write_bytes. 
-        // For other colors, we use a tighter loop.
         let ptr = self.buffer;
         for i in 0..pixel_count {
             ptr.add(i).write_volatile(color);
@@ -70,46 +65,37 @@ impl<'a> Renderer<'a> {
     }
 
     pub unsafe fn draw_image(&self, x: u64, y: u64, width: u64, height: u64, data: &[u8]) {
-        let stride = self.fb.width;
         let data_ptr = data.as_ptr() as *const u32;
         for dy in 0..height {
-            let row_offset = (y + dy) * stride;
             for dx in 0..width {
                 let src_pixel = data_ptr.add((dy * width + dx) as usize).read_volatile();
                 let alpha = (src_pixel >> 24) as u8;
-                let offset = (row_offset + x + dx) as usize;
-                if alpha == 255 {
-                    self.buffer.add(offset).write_volatile(src_pixel);
-                } else if alpha > 0 {
-                    let dst_ptr = self.buffer.add(offset);
-                    let bg_pixel = dst_ptr.read_volatile();
-                    dst_ptr.write_volatile(self.blend_pixels(src_pixel, bg_pixel, alpha));
+                if alpha > 0 {
+                    self.put_pixel_alpha((x + dx) as usize, (y + dy) as usize, src_pixel, alpha);
                 }
             }
         }
     }
 
-    // RESTORED: draw_image_faded
     pub unsafe fn draw_image_faded(&self, x: u64, y: u64, width: u64, height: u64, data: &[u8], global_alpha: u8) {
-        let stride = self.fb.width;
         let data_ptr = data.as_ptr() as *const u32;
         for dy in 0..height {
-            let row_offset = (y + dy) * stride;
             for dx in 0..width {
                 let src_pixel = data_ptr.add((dy * width + dx) as usize).read_volatile();
                 let original_alpha = (src_pixel >> 24) as u8;
                 let combined_alpha = ((original_alpha as u16 * global_alpha as u16) / 255) as u8;
                 if combined_alpha > 0 {
-                    let offset = (row_offset + x + dx) as usize;
-                    let dst_ptr = self.buffer.add(offset);
-                    let bg_pixel = dst_ptr.read_volatile();
-                    dst_ptr.write_volatile(self.blend_pixels(src_pixel, bg_pixel, combined_alpha));
+                    self.put_pixel_alpha((x + dx) as usize, (y + dy) as usize, src_pixel, combined_alpha);
                 }
             }
         }
     }
 
+    /// Primary safe pixel function
     pub fn put_pixel(&self, x: usize, y: usize, color: u32) {
+        if x >= self.fb.width as usize || y >= self.fb.height as usize {
+            return;
+        }
         let stride = self.fb.pitch as usize / 4;
         let offset = (y * stride) + x;
         unsafe {
@@ -117,13 +103,29 @@ impl<'a> Renderer<'a> {
         }
     }
 
+    /// Safe pixel function with alpha blending
+    pub fn put_pixel_alpha(&self, x: usize, y: usize, color: u32, alpha: u8) {
+        if x >= self.fb.width as usize || y >= self.fb.height as usize {
+            return;
+        }
+        let stride = self.fb.pitch as usize / 4;
+        let offset = (y * stride) + x;
+        unsafe {
+            let dst_ptr = self.buffer.add(offset);
+            if alpha == 255 {
+                dst_ptr.write_volatile(color);
+            } else {
+                let bg_pixel = dst_ptr.read_volatile();
+                dst_ptr.write_volatile(self.blend_pixels(color, bg_pixel, alpha));
+            }
+        }
+    }
+
     pub fn draw_char(&self, x: usize, y: usize, c: char, color: u32) {
-        // Map ASCII to your current 16-entry hex font for testing
-        // or handle the index normally if you expand the font later.
         let index = match c {
             '0'..='9' => (c as usize - '0' as usize),
             'a'..='f' => (c as usize - 'a' as usize + 10),
-            _ => return, // Ignore non-hex chars for now
+            _ => return, 
         };
 
         if index >= FONT_8X8.len() { return; }
@@ -140,17 +142,11 @@ impl<'a> Renderer<'a> {
     }
 
     pub fn draw_cursor(&mut self, x: usize, y: usize) {
-        // 1. Restore background at the PREVIOUS position
         self.restore_background();
-
-        // 2. Update tracking to the NEW position
         self.last_cursor_x = x;
         self.last_cursor_y = y;
-
-        // 3. Save background at the NEW position
         self.save_background(x, y);
 
-        // 4. Draw sprite at the NEW position
         for row in 0..cursor::CURSOR_HEIGHT {
             for col in 0..cursor::CURSOR_WIDTH {
                 let sprite_pixel = cursor::SPRITE[row * cursor::CURSOR_WIDTH + col];
@@ -168,10 +164,17 @@ impl<'a> Renderer<'a> {
         let stride = self.fb.pitch as usize / 4;
         for row in 0..cursor::CURSOR_HEIGHT {
             for col in 0..cursor::CURSOR_WIDTH {
-                unsafe {
-                    let offset = ((y + row) * stride) + (x + col);
-                    let bg_color = self.buffer.add(offset).read_volatile(); // Fixed field name
-                    self.cursor_backup[row * cursor::CURSOR_WIDTH + col] = bg_color;
+                let target_x = x + col;
+                let target_y = y + row;
+                
+                // If the cursor is partially off-screen, we save 0 for those pixels
+                if target_x < self.fb.width as usize && target_y < self.fb.height as usize {
+                    unsafe {
+                        let offset = (target_y * stride) + target_x;
+                        self.cursor_backup[row * cursor::CURSOR_WIDTH + col] = self.buffer.add(offset).read_volatile();
+                    }
+                } else {
+                    self.cursor_backup[row * cursor::CURSOR_WIDTH + col] = 0;
                 }
             }
         }
@@ -181,29 +184,43 @@ impl<'a> Renderer<'a> {
         let stride = self.fb.pitch as usize / 4;
         for row in 0..cursor::CURSOR_HEIGHT {
             for col in 0..cursor::CURSOR_WIDTH {
-                unsafe {
-                    let offset = ((self.last_cursor_y + row) * stride) + (self.last_cursor_x + col);
-                    // Write the saved background pixel back
-                    let bg_color = self.cursor_backup[row * cursor::CURSOR_WIDTH + col];
-                    self.buffer.add(offset).write_volatile(bg_color);
+                let target_x = self.last_cursor_x + col;
+                let target_y = self.last_cursor_y + row;
+                
+                // Only restore if within bounds
+                if target_x < self.fb.width as usize && target_y < self.fb.height as usize {
+                    unsafe {
+                        let offset = (target_y * stride) + target_x;
+                        let bg_color = self.cursor_backup[row * cursor::CURSOR_WIDTH + col];
+                        self.buffer.add(offset).write_volatile(bg_color);
+                    }
                 }
             }
         }
     }
 
     pub unsafe fn swap_rect(&self, x: usize, y: usize, w: usize, h: usize) {
-        // Change self.fb.buffer to self.fb.address
         let fb_ptr = self.fb.address.as_ptr().unwrap() as *mut u32;
         let stride = self.fb.pitch as usize / 4;
 
         for row in y..(y + h) {
+            // Safety: Don't draw past screen height
             if row >= self.fb.height as usize { break; }
-            let offset = (row * stride) + x;
             
+            // Safety: Don't draw past screen width
+            let row_width = if x + w > self.fb.width as usize {
+                (self.fb.width as usize).saturating_sub(x)
+            } else {
+                w
+            };
+
+            if row_width == 0 { continue; }
+
+            let offset = (row * stride) + x;
             core::ptr::copy_nonoverlapping(
                 self.buffer.add(offset),
                 fb_ptr.add(offset),
-                w
+                row_width
             );
         }
     }

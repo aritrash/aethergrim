@@ -14,7 +14,8 @@ use core::panic::PanicInfo;
 use gui::utils::Renderer;
 use gui::splash::draw_splash;
 use core::arch::naked_asm;
-use x86_64::VirtAddr;
+use x86_64::{VirtAddr, PhysAddr};
+use x86_64::structures::paging::{Mapper, Page, PageTableFlags as Flags, PhysFrame, Size4KiB};
 use crate::arch::x86_64::process::{self, SPLASH_COMPLETE};
 use core::sync::atomic::Ordering;
 use crate::gui::compositor::Compositor;
@@ -71,18 +72,67 @@ extern "C" fn kernel_main() -> ! {
     
     crate::serial_println!("Aether Grim: Dynamic Allocator Ready.");
 
-    // 4. Initialize Input Drivers
+    // 4. PCI Enumeration & Hardware Discovery
+    crate::serial_println!("--- PCI SCAN START ---");
+    let pci_devices = drivers::pci::scan_bus();
+    
+    if pci_devices.is_empty() {
+        crate::serial_println!("WARNING: No PCI devices detected. Check Port I/O logic.");
+    }
+
+    for dev in pci_devices {
+        let bar0 = dev.get_bar0();
+        crate::serial_println!(
+            "[PCI] Bus {:02x}:Dev {:02x} | ID {:04x}:{:04x} | Class {:02x}:{:02x}:{:02x} | BAR0: {:#x}",
+            dev.bus, dev.slot, dev.vendor_id, dev.device_id, dev.class, dev.subclass, dev.prog_if, bar0
+        );
+
+        // Specific check for xHCI (USB 3.0)
+        if dev.class == 0x0C && dev.subclass == 0x03 && dev.prog_if == 0x30 {
+            let bar0 = dev.get_bar0() as usize;
+            let hhdm = arch::x86_64::memory::get_hhdm_offset() as usize;
+
+            crate::serial_println!(">>> xHCI Detected at {:#x}", bar0);
+
+            // 1. Manually allocate a physical frame for the driver data
+            // This is safer than using the heap for 4096-aligned structures
+            use x86_64::structures::paging::FrameAllocator;
+            let frame = frame_allocator.allocate_frame().expect("No physical memory for xHCI");
+            let data_virt_ptr = (frame.start_address().as_u64() as usize + hhdm) as *mut drivers::usb::xhci::XhciData;
+
+            unsafe {
+                let mut xhci = drivers::usb::xhci::XhciController::new(bar0, hhdm, data_virt_ptr);
+                xhci.reset();
+                xhci.init_rings();
+                xhci.enable();
+                // xhci.probe_ports(); // Add this back if you want to see connected devices
+            }
+        }
+            crate::serial_println!("--- PCI SCAN END ---");
+    }
+
+    // 5. Initialize Legacy Input Drivers (Fallback)
     unsafe {
         drivers::legacy::keyboard::init();
         drivers::legacy::mouse::init();
+        drivers::legacy::mouse::reset();
     }
     
     crate::serial_println!("Input Systems Online.");
 
-    // 5. Setup Graphics & Compositor
+    // 6. Setup Graphics & Compositor
     if let Some(response) = FRAMEBUFFER_REQUEST.get_response().get() {
         if let Some(fb_ptr) = response.framebuffers().iter().next() {
             let fb = unsafe { &*fb_ptr.as_ptr() };
+
+            crate::serial_println!("Display: {}x{} (Pitch: {} bytes)", fb.width, fb.height, fb.pitch);
+
+            // Safety check: If we got something other than 1920x1080, 
+            // our static BACKBUFFER will overflow or mismatch.
+            if fb.width != 1920 || fb.height != 1080 {
+                crate::serial_println!("WARNING: Resolution mismatch! Assets will look corrupted.");
+            }
+
             let mut renderer = Renderer::new(fb, unsafe { BACKBUFFER.as_mut_ptr() });
 
             // Run Splash Screen
@@ -95,7 +145,7 @@ extern "C" fn kernel_main() -> ! {
                 SPLASH_COMPLETE.store(true, Ordering::SeqCst);
             }
 
-            // Initialize the Compositor (Our UI Brain)
+            // Initialize the Compositor
             let mut compositor = Compositor::new();
 
             crate::serial_println!("Aether Desktop Ready. Enabling Interrupts...");
@@ -104,33 +154,39 @@ extern "C" fn kernel_main() -> ! {
             unsafe { 
                 renderer.clear_screen(0x000D1117);
                 compositor.draw_icons(&renderer);
-                renderer.swap_buffers(); } // PUSH THE ENTIRE DESKTOP ONCE
+                renderer.swap_buffers(); 
+            }
 
             loop {
                 let (mx, my) = drivers::legacy::mouse::get_mouse_pos();
                 let draw_x = mx as usize;
                 let draw_y = my as usize;
 
-                // 1. Capture the EXACT state of the last draw
                 let last_x = renderer.last_cursor_x;
                 let last_y = renderer.last_cursor_y;
 
-                // 2. Render to BACKBUFFER
+                compositor.handle_click(mx, my);
+                if let Some(sc) = drivers::legacy::keyboard::pop_scancode() {
+                    compositor.handle_keyboard(sc);
+                }
+
+                renderer.draw_rect(last_x.saturating_sub(5), last_y.saturating_sub(5), 40, 40, 0x000D1117);
+                compositor.draw_icons(&renderer);
                 compositor.render(&renderer);
                 renderer.draw_cursor(draw_x, draw_y);
 
-                // 3. SWAP THE BOUNDING BOX
                 unsafe {
-                    // Calculate a rectangle that encloses both old and new positions
                     let min_x = last_x.min(draw_x).saturating_sub(10);
                     let min_y = last_y.min(draw_y).saturating_sub(10);
                     let max_x = last_x.max(draw_x) + 40;
                     let max_y = last_y.max(draw_y) + 40;
 
-                    let width = (max_x - min_x).min(1919);
-                    let height = (max_y - min_y).min(1079);
-
-                    renderer.swap_rect(min_x, min_y, width, height);
+                    renderer.swap_rect(
+                        min_x, 
+                        min_y, 
+                        (max_x - min_x).min(1919), 
+                        (max_y - min_y).min(1079)
+                    );
                 }
 
                 x86_64::instructions::hlt();

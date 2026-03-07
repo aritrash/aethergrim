@@ -1,15 +1,15 @@
 // kernel/src/gui/splash.rs
 use crate::gui::utils::Renderer;
 
-static AEG_LOGO: &[u8] = include_bytes!("../../assets/aeg_logo.raw");
+static AEG_LOGO: &[u8] = include_bytes!("../../assets/aether.raw");
 
 pub unsafe fn draw_splash(renderer: &Renderer, progress: u64) {
     let slate_bg = 0x000D1117;
     let accent_blue = 0x0058A6FF;
     let track_color = 0x001C2533;
     
-    let logo_w = 347; 
-    let logo_h = 180;
+    let logo_w = 400; 
+    let logo_h = 400;
     let logo_x = (renderer.width() - logo_w) / 2;
     let logo_y = (renderer.height() / 2) - logo_h - 20;
 

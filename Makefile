@@ -26,4 +26,10 @@ $(ISO): $(KERNEL)
 		iso_root -o $(ISO)
 
 run: $(ISO)
-	qemu-system-x86_64 -cdrom aether-grim.iso -vga std -serial stdio -m 512M
+	qemu-system-x86_64 \
+		-cdrom aether-grim.iso \
+		-device qemu-xhci \
+		-device virtio-vga,xres=1920,yres=1080 \
+		-display sdl,gl=on \
+		-serial stdio \
+		-m 2G
