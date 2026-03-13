@@ -77,7 +77,7 @@ extern "C" fn kernel_main() -> ! {
     let pci_devices = drivers::pci::scan_bus();
     
     if pci_devices.is_empty() {
-        crate::serial_println!("WARNING: No PCI devices detected. Check Port I/O logic.");
+        crate::serial_println!("WARNING: No PCI devices detected.");
     }
 
     for dev in pci_devices {
@@ -87,29 +87,43 @@ extern "C" fn kernel_main() -> ! {
             dev.bus, dev.slot, dev.vendor_id, dev.device_id, dev.class, dev.subclass, dev.prog_if, bar0
         );
 
-        // Specific check for xHCI (USB 3.0)
+        let hhdm = arch::x86_64::memory::get_hhdm_offset() as usize;
+
+        // --- xHCI Logic ---
         if dev.class == 0x0C && dev.subclass == 0x03 && dev.prog_if == 0x30 {
-            let bar0 = dev.get_bar0() as usize;
-            let hhdm = arch::x86_64::memory::get_hhdm_offset() as usize;
-
             crate::serial_println!(">>> xHCI Detected at {:#x}", bar0);
-
-            // 1. Manually allocate a physical frame for the driver data
-            // This is safer than using the heap for 4096-aligned structures
             use x86_64::structures::paging::FrameAllocator;
             let frame = frame_allocator.allocate_frame().expect("No physical memory for xHCI");
             let data_virt_ptr = (frame.start_address().as_u64() as usize + hhdm) as *mut drivers::usb::xhci::XhciData;
 
             unsafe {
-                let mut xhci = drivers::usb::xhci::XhciController::new(bar0, hhdm, data_virt_ptr);
+                let mut xhci = drivers::usb::xhci::XhciController::new(bar0 as usize, hhdm, data_virt_ptr);
                 xhci.reset();
                 xhci.init_rings();
                 xhci.enable();
-                // xhci.probe_ports(); // Add this back if you want to see connected devices
             }
         }
-            crate::serial_println!("--- PCI SCAN END ---");
+
+        // --- Intel HDA Logic ---
+        // Class 04 is Multimedia. Subclass 03 is HDA. 
+        // Note: Some older QEMU versions use Subclass 01 (Audio Controller).
+        if dev.class == 0x04 && (dev.subclass == 0x03 || dev.subclass == 0x01) {
+            let bar0 = dev.get_bar0() as usize;
+            let hhdm = arch::x86_64::memory::get_hhdm_offset() as usize;
+            
+            // --- ENABLE BUS MASTERING ---
+            let command_reg = dev.read_config_u16(0x04);
+            dev.write_config_u16(0x04, command_reg | 0x4); 
+            
+            use x86_64::structures::paging::FrameAllocator;
+            let frame = frame_allocator.allocate_frame().expect("No PMM frame for HDA");
+            let bdl_ptr = (frame.start_address().as_u64() as usize + hhdm) as *mut u8;
+
+            crate::serial_println!(">>> Found Intel HDA: P{:#x} (Bus Mastering Enabled)", bar0);
+            drivers::audio::init_audio(bar0, hhdm, bdl_ptr);
+        }
     }
+    crate::serial_println!("--- PCI SCAN COMPLETE ---");
 
     // 5. Initialize Legacy Input Drivers (Fallback)
     unsafe {

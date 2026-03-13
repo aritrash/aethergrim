@@ -8,8 +8,8 @@ pub unsafe fn draw_splash(renderer: &Renderer, progress: u64) {
     let accent_blue = 0x0058A6FF;
     let track_color = 0x001C2533;
     
-    let logo_w = 400; 
-    let logo_h = 400;
+    let logo_w = 350; 
+    let logo_h = 350;
     let logo_x = (renderer.width() - logo_w) / 2;
     let logo_y = (renderer.height() / 2) - logo_h - 20;
 

@@ -30,6 +30,9 @@ run: $(ISO)
 		-cdrom aether-grim.iso \
 		-device qemu-xhci \
 		-device virtio-vga,xres=1920,yres=1080 \
+		-device intel-hda \
+		-device hda-duplex,audiodev=audio0 \
+		-audiodev sdl,id=audio0 \
 		-display sdl,gl=on \
 		-serial stdio \
 		-m 2G
